@@ -1,105 +1,112 @@
-#!/usr/bin/env zsh
+# vim:et sts=2 sw=2 ft=zsh
 #
-# Generates trace log to debug zim and zsh issues
+# Generates trace log to debug Zim and Zsh issues
 #
 
-print "This function creates a trace log to debug
-Zsh and Zim functionality.
+local -r ztrace_dir=/tmp/ztrace
+print "This function creates a trace log to debug Zsh and Zim functionality. It will
+copy your .zshrc to ${ztrace_dir}, ammend profiling code, launch a new shell, log
+the trace, close the shell, archive the logs, and finally print the path to the
+archive.
+"
 
-It will copy your .zshrc to /tmp/ztrace/, ammend profiling
-code, launch a new shell, log the trace, close the shell,
-archive the logs, and finally print the path to the archive."
-
-read \?"Press [Enter] to begin trace."
-
-mkdir -p /tmp/ztrace
-# make sure that we were able to create the directory
-if [[ ! -d /tmp/ztrace ]]; then
-  print 'failed to create /tmp/ztrace directory. Aborting.'
-  return 1
-else
-  # check if known output file, if exists
-  # rm all directory contents
-  if [[ -e /tmp/ztrace/ztrace.log ]]; then
-    print "\nLogs from previous run of trace-zim are present
-Deleting old logs now..."
-    # use of anonymous function for dotglob opt
-    () {
-      setopt dotglob
-      rm -rf /tmp/ztrace/*
-    }
-  fi
+if [[ -e ${ztrace_dir} ]]; then
+  print -n "${ztrace_dir} already exists. Deleting it... "
+  command rm -rf ${ztrace_dir}
+  print 'Done.'
 fi
+print -n "Creating ${ztrace_dir}... "
+command mkdir -p ${ztrace_dir}
+# make sure that we were able to create the directory
+if [[ ! -d ${ztrace_dir} ]]; then
+  print "Failed to create ${ztrace_dir}. Aborting."
+  return 1
+fi
+print 'Done.'
 
-# get some basic system information (kernel and zsh version)
+# get some basic system information (kernel and Zsh version)
 print "Zsh version:
   $(zsh --version)
 Kernel information:
   $(uname -a)
-fpath info:
-  ${fpath}" >! /tmp/ztrace/sysinfo
+fpath:
+  ${fpath}" >! ${ztrace_dir}/sysinfo
 
-cp ${ZDOTDIR:-${HOME}}/.zshrc /tmp/ztrace/.zshrc.orig
-cp ${ZDOTDIR:-${HOME}}/.zimrc /tmp/ztrace/.zimrc
-# rsync will allow us to not have to copy the .git folder; use if available 
+command cp {${ZDOTDIR:-${HOME}},${ztrace_dir}}/.zimrc
+command cp {${ZDOTDIR:-${HOME}},${ztrace_dir}}/.zlogin
+command cp {${ZDOTDIR:-${HOME}},${ztrace_dir}}/.zshenv
+command cp {${ZDOTDIR:-${HOME}},${ztrace_dir}}/.zshrc
+command cp ${ztrace_dir}/.zshrc{,.orig}
+# rsync will allow us to not have to copy the .git folder; use if available
 if (( ${+commands[rsync]} )); then
-  rsync -az --exclude .git ${ZIM_HOME} /tmp/ztrace/
+  command rsync -az --exclude .git ${ZIM_HOME} ${ztrace_dir}/
 else
-  cp -R ${ZIM_HOME} /tmp/ztrace/
+  command cp -R ${ZIM_HOME} ${ztrace_dir}/
 fi
 
+print -n 'Spawning Zsh and initializing Zim... '
+ZDOTDIR=${ztrace_dir} zsh "${@}" -lic 'exit'
+print 'Done.'
+
 # create a modified .zshrc to produce a trace log
-cat <<EOF >! /tmp/ztrace/.zshrc
+cat <<EOF >! ${ztrace_dir}/.zshrc
 ###################
-# zim trace start #
+# Zim trace start #
 ###################
 PS4=$'%D{%s%6.}-_-'
-exec 3>&2 2>/tmp/ztrace/sample-time.$$.log
+exec 3>&2 2>${ztrace_dir}/sample-time.$$.log
 zmodload zsh/zprof
 setopt xtrace prompt_subst
 EOF
 
-cat /tmp/ztrace/.zshrc.orig >>! /tmp/ztrace/.zshrc
+cat ${ztrace_dir}/.zshrc.orig >>! ${ztrace_dir}/.zshrc
 
-cat <<EOF >>! /tmp/ztrace/.zshrc
+cat <<EOF >>! ${ztrace_dir}/.zshrc
 #################
-# zim trace end #
+# Zim trace end #
 #################
 
 unsetopt xtrace
-zprof >! /tmp/ztrace/zprof
-#non-linux systems have weird fd; also, no real need to redirect back
-#prompt is (practically speaking) non-interactive, fd exists only for that process
-#which is closed (by typing exit)
+zprof >! ${ztrace_dir}/zprof
+# non-linux systems have weird fd; also, no real need to redirect back prompt is
+# (practically speaking) non-interactive, fd exists only for that process which
+# is closed (by typing exit)
 
 #exec 2>&3 3>&-
 EOF
 
-print "\nSpawning zsh and producing trace...\n\n"
-ZDOTDIR=/tmp/ztrace zsh -ic 'exit'
-print "Trace complete.
-Parsing logs to a nicer format; this may take some time..."
+print -n 'Spawning Zsh and producing trace... '
+ZDOTDIR=${ztrace_dir} zsh "${@}" -ic 'exit'
+print 'Done.'
 
-# this is ugly thing makes it pretty...
-while read line; do if [[ ${line} =~ '^[0-9]+-_-' ]]; then crt=000000$((${line%%-_-*}-10#0$last)); printf "%12.9f %s\n" ${crt:0:${#crt}-6}.${crt:${#crt}-6} ${line#*-_-}; last=${line%%-_-*}; fi; done < /tmp/ztrace/sample-time.(*).log > /tmp/ztrace/ztrace.log
-print "Parsing complete!"
+print -n 'Parsing logs to a nicer format... '
+local line last
+while IFS= read -r line; do
+  if [[ ${line} =~ '^[0-9]+-_-' ]]; then
+    if [[ -n ${last} ]]; then
+      printf "%.6f %s\n" $(( (${line%%-_-*} - ${last%%-_-*}) / (10.0 ** 6) )) ${last#*-_-}
+    fi
+    last=${line}
+  fi
+done < ${ztrace_dir}/sample-time.(*).log > ${ztrace_dir}/ztrace.log
+print 'Done.'
 
-# safe to remove old, unneeded environment files 
-print "Tidying up before archive..."
-rm -f /tmp/ztrace/sample-time.*
-rm -rf /tmp/ztrace/.zim
-rm -f /tmp/ztrace/.zshrc
-mv /tmp/ztrace/.zshrc.orig /tmp/ztrace/.zshrc
-rm -f /tmp/ztrace/.zhistory
-rm -f /tmp/ztrace/.zcompdump*
+# safe to remove old, unneeded environment files
+print -n 'Tidying up before archive... '
+command rm -f ${ztrace_dir}/sample-time.*
+command rm -rf ${ztrace_dir}/.zim
+command rm -f ${ztrace_dir}/.zshrc
+command mv ${ztrace_dir}/.zshrc.orig ${ztrace_dir}/.zshrc
+command rm -f ${ztrace_dir}/.zcompdump*
+command rm -f ${ztrace_dir}/.*.zwc
+print 'Done.'
 
-print "Archiving trace logs...\n"
-
-tar -czf /tmp/ztrace.tar.gz /tmp/ztrace/
-
-print "Archive complete!\n
+print -n 'Creating archive... '
+tar -czf ${ztrace_dir}.tar.gz -C ${ztrace_dir:h}/ ${ztrace_dir:t}/
+print 'Done.'
+print "
 Trace by with execution time available at:
-  /tmp/ztrace/ztrace.log
+  ${ztrace_dir}/ztrace.log
 Archive (for sharing/help) available at:
-  /tmp/ztrace.tar.gz"
+  ${ztrace_dir}.tar.gz"
 
