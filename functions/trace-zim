@@ -4,10 +4,10 @@
 #
 
 local -r ztrace_dir=/tmp/ztrace
-print "This function creates a trace log to debug Zsh and Zim functionality. It will
-copy your .zshrc to ${ztrace_dir}, ammend profiling code, launch a new shell, log
-the trace, close the shell, archive the logs, and finally print the path to the
-archive.
+print "
+This function creates a trace log to debug Zsh and Zim functionality. It will copy your .zshrc to
+${ztrace_dir}, ammend profiling code, launch a new shell, log the trace, close the shell, and
+finally archive the logs in ${ztrace_dir}.tar.gz.
 "
 
 if [[ -e ${ztrace_dir} ]]; then
@@ -43,6 +43,7 @@ if (( ${+commands[rsync]} )); then
 else
   command cp -R ${ZIM_HOME} ${ztrace_dir}/
 fi
+command rm -f ${ztrace_dir}/.zim/{,login_}init.*
 
 print -n 'Spawning Zsh and initializing Zim... '
 ZDOTDIR=${ztrace_dir} zsh "${@}" -lic 'exit'
@@ -68,11 +69,6 @@ cat <<EOF >>! ${ztrace_dir}/.zshrc
 
 unsetopt xtrace
 zprof >! ${ztrace_dir}/zprof
-# non-linux systems have weird fd; also, no real need to redirect back prompt is
-# (practically speaking) non-interactive, fd exists only for that process which
-# is closed (by typing exit)
-
-#exec 2>&3 3>&-
 EOF
 
 print -n 'Spawning Zsh and producing trace... '
